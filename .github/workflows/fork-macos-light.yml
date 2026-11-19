@@ -19,6 +19,8 @@ jobs:
     env:
       UPSTREAM_TAG: v0.23.2
       UPSTREAM_COMMIT: ae2a81ccc00e9b7c06301523e5bb09608397149c
+      RELEASE_CLAIM_TAG: rc.13-v0.23.2
+      RELEASE_CLAIM_OBJECT: 78a1f7893d03e7de148c6636f073798e06e07906
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       # 工作流和上游源码分别检出，保证打包脚本使用原始、干净的发布提交。
@@ -41,8 +43,47 @@ jobs:
           test -z "$(git status --porcelain)"
           # 避免 Spotlight 占用打包阶段的临时挂载卷。
           sudo mdutil -a -i off || true
-          # 使用上游发布标签对应的提交构建，并关闭官方渠道自动更新。
-          python scripts/bundles/desktop.py --commit "$UPSTREAM_COMMIT" --variant light -- -c.mac.identity=-
+          # 上游发布脚本用同版本的候选标签确定打包时间，校验标签对象及其提交。
+          git fetch --depth=1 origin "refs/tags/$RELEASE_CLAIM_TAG:refs/tags/$RELEASE_CLAIM_TAG"
+          test "$(git rev-parse "$RELEASE_CLAIM_TAG")" = "$RELEASE_CLAIM_OBJECT"
+          test "$(git rev-parse "$RELEASE_CLAIM_TAG^{commit}")" = "$UPSTREAM_COMMIT"
+          python scripts/bundles/desktop.py --tag "$UPSTREAM_TAG" --variant light
+
+      - name: Sign and package the fork downloads
+        run: |
+          release=apps/desktop/release
+          stem="HermesLight-${UPSTREAM_TAG#v}-mac-arm64"
+          app="$release/mac-arm64/Hermes Light.app"
+          test -d "$app"
+          node_bin="$(python -c 'import json; print(json.load(open(".build/desktop-job/prepared.json"))["node"])')"
+          # 使用上游锁定的 osx-sign 为主程序和嵌套组件签名，并沿用本来的权限声明。
+          (cd apps/desktop && "$node_bin" --input-type=module - "$GITHUB_WORKSPACE/source/$app" <<'JS'
+          import { resolve } from 'node:path'
+          import { sign } from '@electron/osx-sign'
+
+          const app = process.argv[2]
+          await sign({
+            app,
+            identity: '-',
+            identityValidation: false,
+            preAutoEntitlements: false,
+            platform: 'darwin',
+            type: 'distribution',
+            optionsForFile: file => ({
+              entitlements: resolve('electron', file === app ? 'entitlements.mac.plist' : 'entitlements.mac.inherit.plist'),
+              hardenedRuntime: true,
+              timestamp: 'none'
+            })
+          })
+          JS
+          )
+          # 从同一个已签名应用生成 DMG 和 ZIP，避免发布签名前的文件。
+          staging="$(mktemp -d "$RUNNER_TEMP/hermes-light-dmg.XXXXXX")"
+          ditto "$app" "$staging/Hermes Light.app"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -ov -volname 'Hermes Light' -srcfolder "$staging" -format UDZO "$release/$stem.dmg"
+          rm -- "$release/$stem.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$release/$stem.zip"
 
       - name: Verify the disk image and archive
         run: |
@@ -55,7 +96,7 @@ jobs:
           mount_point="$(mktemp -d "$RUNNER_TEMP/hermes-light.XXXXXX")"
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_point"
           trap 'hdiutil detach "$mount_point"' EXIT
-          app_name="Hermes Light ${UPSTREAM_COMMIT:0:7}"
+          app_name="Hermes Light"
           app="$mount_point/$app_name.app"
           resources="$app/Contents/Resources"
           test "$(lipo -archs "$app/Contents/MacOS/$app_name")" = arm64
@@ -74,7 +115,7 @@ jobs:
               stamp = json.load(handle)
           assert stamp['payload'] == 'light' and 'runtime' not in stamp, stamp
           assert stamp['commit'] == os.environ['UPSTREAM_COMMIT'], stamp
-          assert stamp['source'] == 'commit-build' and stamp['updateMechanism'] == 'external', stamp
+          assert stamp['tag'] == os.environ['UPSTREAM_TAG'], stamp
           PY
           # 对外发布时附上两个经过检查的下载件的校验值。
           cd "$release"
