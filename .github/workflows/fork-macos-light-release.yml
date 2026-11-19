@@ -1,4 +1,4 @@
-name: Publish Hermes Light v0.23.2 for macOS
+name: Publish Hermes Light v0.23.2 with SSH setup
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: hermes-light-v0.23.2-macos-release
+  group: hermes-light-v0.23.2-macos-ssh-release
   cancel-in-progress: false
 
 jobs:
@@ -19,9 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      BUILD_RUN: '44442185296'
-      BUILD_COMMIT: 393e6216a1970099e2b22f0a66be09a6ec3a24e4
-      RELEASE_TAG: hermes-light-v0.23.2-macos
+      BUILD_RUN: '44448920355'
+      BUILD_COMMIT: 199626a19eaf538491b66153e0f770b588ae0e69
+      RELEASE_TAG: hermes-light-v0.23.2-macos-ssh
     steps:
       - name: Check the source build run
         env:
@@ -52,9 +52,11 @@ jobs:
 
           - 下载 DMG 安装，也可以解压 ZIP 后使用。`SHA256SUMS.txt` 提供两个下载件的校验值。
           - Mac 上只需安装桌面客户端。应用不含本地 Hermes Agent 或 Python，远端服务器需已安装 Hermes Agent。
-          - 此 fork 的产物使用临时签名，未经 Apple 公证。
+          - 首次设置点 **Connect to existing Hermes → Connect via SSH**，输入 SSH Host（可用 `~/.ssh/config` 别名），再测试并连接。SSH 使用系统 OpenSSH 和远端已安装的 Hermes。
+          - 现有 Gateway URL、本地安装选项和其余官方功能继续可用。本包只在首次设置增加 SSH 入口。
+          - 此 fork 通过 GitHub Releases 提供手动下载。本包使用临时签名，未经 Apple 公证。
 
-          [GitHub Actions 构建与验包记录](https://github.com/GaryLee271/hermes-agent/actions/runs/44442185296)
+          [GitHub Actions 构建与验包记录](https://github.com/GaryLee271/hermes-agent/actions/runs/44448920355)
           MD
           release_json="$RUNNER_TEMP/hermes-light-release.json"
           if gh release view "$RELEASE_TAG" --json isDraft,assets > "$release_json"; then
@@ -63,7 +65,7 @@ jobs:
             fi
           else
             gh release create "$RELEASE_TAG" "$dmg" "$zip" SHA256SUMS.txt \
-              --draft --target "$BUILD_COMMIT" --title 'Hermes Light v0.23.2 for macOS (Apple Silicon)' \
+              --draft --target "$BUILD_COMMIT" --title 'Hermes Light v0.23.2 for macOS (Apple Silicon, SSH setup)' \
               --notes-file "$RUNNER_TEMP/hermes-light-release-notes.md"
           fi
           gh release view "$RELEASE_TAG" --json isDraft,assets > "$release_json"
