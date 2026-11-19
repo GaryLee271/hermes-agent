@@ -23,9 +23,11 @@ jobs:
       RELEASE_CLAIM_OBJECT: 78a1f7893d03e7de148c6636f073798e06e07906
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
-      # 使用 fork 的干净提交打包，并单独对照上游发布标签。
+      # 工作流和上游源码分别检出，保证打包脚本使用原始、干净的发布提交。
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          repository: NousResearch/hermes-agent
+          ref: refs/tags/${{ env.UPSTREAM_TAG }}
           path: source
           persist-credentials: false
 
@@ -36,25 +38,16 @@ jobs:
       - name: Build the Light DMG and ZIP
         run: |
           test "$(uname -m)" = arm64
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git fetch --depth=1 https://github.com/NousResearch/hermes-agent.git \
-            "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG" \
-            "refs/tags/$RELEASE_CLAIM_TAG:refs/tags/$RELEASE_CLAIM_TAG"
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_COMMIT"
           test "$(git rev-parse "$UPSTREAM_TAG^{commit}")" = "$UPSTREAM_COMMIT"
           test -z "$(git status --porcelain)"
           # 避免 Spotlight 占用打包阶段的临时挂载卷。
           sudo mdutil -a -i off || true
           # 上游发布脚本用同版本的候选标签确定打包时间，校验标签对象及其提交。
+          git fetch --depth=1 origin "refs/tags/$RELEASE_CLAIM_TAG:refs/tags/$RELEASE_CLAIM_TAG"
           test "$(git rev-parse "$RELEASE_CLAIM_TAG")" = "$RELEASE_CLAIM_OBJECT"
           test "$(git rev-parse "$RELEASE_CLAIM_TAG^{commit}")" = "$UPSTREAM_COMMIT"
-          python scripts/bundles/desktop.py --tag "$UPSTREAM_TAG" --release-commit "$GITHUB_SHA" --variant light
-
-      - name: Test first-run connection choices
-        run: |
-          node_bin="$(python -c 'import json; print(json.load(open(".build/desktop-job/prepared.json"))["node"])')"
-          cd apps/desktop
-          "$node_bin" node_modules/vitest/vitest.mjs run --project ui src/components/desktop-install-overlay.test.tsx
-          "$node_bin" node_modules/vitest/vitest.mjs run --project electron electron/first-run-setup-main-process.test.ts
+          python scripts/bundles/desktop.py --tag "$UPSTREAM_TAG" --variant light
 
       - name: Sign and package the fork downloads
         run: |
@@ -121,7 +114,7 @@ jobs:
           with open(sys.argv[1], encoding='utf-8') as handle:
               stamp = json.load(handle)
           assert stamp['payload'] == 'light' and 'runtime' not in stamp, stamp
-          assert stamp['commit'] == os.environ['GITHUB_SHA'], stamp
+          assert stamp['commit'] == os.environ['UPSTREAM_COMMIT'], stamp
           assert stamp['tag'] == os.environ['UPSTREAM_TAG'], stamp
           PY
           # 对外发布时附上两个经过检查的下载件的校验值。

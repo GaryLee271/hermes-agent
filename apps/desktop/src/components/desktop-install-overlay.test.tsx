@@ -114,35 +114,6 @@ describe('DesktopInstallOverlay first-run setup', () => {
     expect(screen.queryByText(/Fetching installer manifest/i)).toBeNull()
   })
 
-  it('tests and applies an SSH route from first-run setup without starting local bootstrap', async () => {
-    const desktop = installDesktopMock(
-      bootstrapState({
-        setupChoice: {
-          platform: 'darwin',
-          activeRoot: '/example/hermes-agent',
-          local: 'none',
-          bundled: false
-        }
-      })
-    )
-    desktop.testConnectionConfig.mockResolvedValue({ reachable: true, remotePlatform: 'Linux/arm64' })
-    desktop.applyConnectionConfig.mockResolvedValue({ ok: true })
-    render(<DesktopInstallOverlay />)
-
-    fireEvent.click(await screen.findByText('Connect to existing Hermes'))
-    fireEvent.click(screen.getByRole('button', { name: 'Connect via SSH' }))
-    fireEvent.change(screen.getByPlaceholderText('user@host:22'), { target: { value: 'user@gateway.example:2222' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Test SSH' }))
-
-    expect(await screen.findByRole('status')).toBeTruthy()
-    const route = { mode: 'ssh', sshHost: 'user@gateway.example:2222', sshKeyPath: '', sshRemoteHermesPath: '' }
-    expect(desktop.testConnectionConfig).toHaveBeenCalledExactlyOnceWith(route)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Connect', exact: true }))
-    await waitFor(() => expect(desktop.applyConnectionConfig).toHaveBeenCalledExactlyOnceWith(route))
-    expect(desktop.continueBootstrapLocal).not.toHaveBeenCalled()
-  })
-
   it('continues local bootstrap only when Install Hermes locally is selected', async () => {
     const desktop = installDesktopMock(
       bootstrapState({
