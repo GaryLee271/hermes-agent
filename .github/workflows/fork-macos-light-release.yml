@@ -1,0 +1,78 @@
+name: Publish Hermes Light v0.23.2 for macOS
+
+on:
+  push:
+    branches: [light-macos-release]
+    paths: [.github/workflows/fork-macos-light-release.yml]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: hermes-light-v0.23.2-macos-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'GaryLee271/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BUILD_RUN: '44442185296'
+      BUILD_COMMIT: 393e6216a1970099e2b22f0a66be09a6ec3a24e4
+      RELEASE_TAG: hermes-light-v0.23.2-macos
+    steps:
+      - name: Check the source build run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN" |
+            jq -e --arg sha "$BUILD_COMMIT" '.conclusion == "success" and .head_sha == $sha and .path == ".github/workflows/fork-macos-light.yml"'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.BUILD_RUN }}
+          name: hermes-light-macos-arm64
+          path: checked-assets
+
+      - name: Publish the verified downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        working-directory: checked-assets
+        run: |
+          dmg=HermesLight-0.23.2-mac-arm64.dmg
+          zip=HermesLight-0.23.2-mac-arm64.zip
+          sha256sum --check --strict SHA256SUMS.txt
+          # 先上传到草稿。核对 GitHub 记录的三个文件摘要后再公开发布。
+          cat > "$RUNNER_TEMP/hermes-light-release-notes.md" <<'MD'
+          基于上游 Hermes Agent `v0.23.2`（`ae2a81ccc00e9b7c06301523e5bb09608397149c`）构建的 macOS Apple Silicon 桌面客户端。
+
+          - 下载 DMG 安装，也可以解压 ZIP 后使用。`SHA256SUMS.txt` 提供两个下载件的校验值。
+          - Mac 上只需安装桌面客户端。应用不含本地 Hermes Agent 或 Python，远端服务器需已安装 Hermes Agent。
+          - 此 fork 的产物使用临时签名，未经 Apple 公证。
+
+          [GitHub Actions 构建与验包记录](https://github.com/GaryLee271/hermes-agent/actions/runs/44442185296)
+          MD
+          release_json="$RUNNER_TEMP/hermes-light-release.json"
+          if gh release view "$RELEASE_TAG" --json isDraft,assets > "$release_json"; then
+            if jq -e '.isDraft == true' "$release_json" >/dev/null; then
+              gh release upload "$RELEASE_TAG" "$dmg" "$zip" SHA256SUMS.txt --clobber
+            fi
+          else
+            gh release create "$RELEASE_TAG" "$dmg" "$zip" SHA256SUMS.txt \
+              --draft --target "$BUILD_COMMIT" --title 'Hermes Light v0.23.2 for macOS (Apple Silicon)' \
+              --notes-file "$RUNNER_TEMP/hermes-light-release-notes.md"
+          fi
+          gh release view "$RELEASE_TAG" --json isDraft,assets > "$release_json"
+          for file in "$dmg" "$zip" SHA256SUMS.txt; do
+            digest="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
+            jq -e --arg file "$file" --arg digest "$digest" \
+              'any(.assets[]; .name == $file and .digest == $digest and .state == "uploaded")' "$release_json"
+          done
+          if jq -e '.isDraft == true' "$release_json" >/dev/null; then
+            gh release edit "$RELEASE_TAG" --draft=false --latest=false
+          fi
+          gh release view "$RELEASE_TAG" --json url,isDraft --jq 'select(.isDraft == false) | .url'
