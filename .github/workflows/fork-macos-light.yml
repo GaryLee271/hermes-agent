@@ -41,7 +41,8 @@ jobs:
           test -z "$(git status --porcelain)"
           # 避免 Spotlight 占用打包阶段的临时挂载卷。
           sudo mdutil -a -i off || true
-          python scripts/bundles/desktop.py --tag "$UPSTREAM_TAG" --variant light -- -c.mac.identity=-
+          # 使用上游发布标签对应的提交构建，并关闭官方渠道自动更新。
+          python scripts/bundles/desktop.py --commit "$UPSTREAM_COMMIT" --variant light -- -c.mac.identity=-
 
       - name: Verify the disk image and archive
         run: |
@@ -54,14 +55,15 @@ jobs:
           mount_point="$(mktemp -d "$RUNNER_TEMP/hermes-light.XXXXXX")"
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_point"
           trap 'hdiutil detach "$mount_point"' EXIT
-          app="$mount_point/Hermes Light.app"
+          app_name="Hermes Light ${UPSTREAM_COMMIT:0:7}"
+          app="$mount_point/$app_name.app"
           resources="$app/Contents/Resources"
-          test "$(lipo -archs "$app/Contents/MacOS/Hermes Light")" = arm64
+          test "$(lipo -archs "$app/Contents/MacOS/$app_name")" = arm64
           codesign --verify --deep --strict "$app"
           test ! -e "$resources/agent-payload"
           # 同时校验 ZIP 携带的构建标记，确保两个下载件都来自 Light 构建。
           zip_stamp="$RUNNER_TEMP/hermes-light-zip-stamp.json"
-          unzip -p "$zip" 'Hermes Light.app/Contents/Resources/install-stamp.json' > "$zip_stamp"
+          unzip -p "$zip" "$app_name.app/Contents/Resources/install-stamp.json" > "$zip_stamp"
           cmp "$resources/install-stamp.json" "$zip_stamp"
           python - "$zip_stamp" <<'PY'
           import json
@@ -72,7 +74,7 @@ jobs:
               stamp = json.load(handle)
           assert stamp['payload'] == 'light' and 'runtime' not in stamp, stamp
           assert stamp['commit'] == os.environ['UPSTREAM_COMMIT'], stamp
-          assert stamp['tag'] == os.environ['UPSTREAM_TAG'], stamp
+          assert stamp['source'] == 'commit-build' and stamp['updateMechanism'] == 'external', stamp
           PY
           # 对外发布时附上两个经过检查的下载件的校验值。
           cd "$release"
