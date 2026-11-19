@@ -19,7 +19,8 @@ export async function rehomePrimaryConnection({
 }: PrimaryConnectionRehomeOptions): Promise<{ resumedFirstRunRemote: boolean }> {
   let resumedFirstRunRemote = false
 
-  if (mode === 'remote') {
+  // 首次设置保存 SSH 后，沿用远程网关流程解除等待，跳过本机运行时安装。
+  if (mode === 'remote' || mode === 'ssh') {
     resumedFirstRunRemote = resumeFirstRunRemote()
     clearLocalBootstrapFailure()
   }

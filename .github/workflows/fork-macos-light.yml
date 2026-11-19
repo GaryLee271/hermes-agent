@@ -54,6 +54,7 @@ jobs:
           node_bin="$(python -c 'import json; print(json.load(open(".build/desktop-job/prepared.json"))["node"])')"
           cd apps/desktop
           "$node_bin" node_modules/vitest/vitest.mjs run --project ui src/components/desktop-install-overlay.test.tsx
+          "$node_bin" node_modules/vitest/vitest.mjs run --project electron electron/first-run-setup-main-process.test.ts
 
       - name: Sign and package the fork downloads
         run: |
