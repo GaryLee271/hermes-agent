@@ -1,0 +1,89 @@
+name: Build Hermes Light for Apple Silicon
+
+on:
+  push:
+    branches: [light-macos]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    env:
+      UPSTREAM_TAG: v0.23.2
+      UPSTREAM_COMMIT: ae2a81ccc00e9b7c06301523e5bb09608397149c
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      # 工作流和上游源码分别检出，保证打包脚本使用原始、干净的发布提交。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: refs/tags/${{ env.UPSTREAM_TAG }}
+          path: source
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Build the Light DMG and ZIP
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_COMMIT"
+          test "$(git rev-parse "$UPSTREAM_TAG^{commit}")" = "$UPSTREAM_COMMIT"
+          test -z "$(git status --porcelain)"
+          # 避免 Spotlight 占用打包阶段的临时挂载卷。
+          sudo mdutil -a -i off || true
+          python scripts/bundles/desktop.py --tag "$UPSTREAM_TAG" --variant light -- -c.mac.identity=-
+
+      - name: Verify the disk image and archive
+        run: |
+          release=apps/desktop/release
+          stem="HermesLight-${UPSTREAM_TAG#v}-mac-arm64"
+          dmg="$release/$stem.dmg"
+          zip="$release/$stem.zip"
+          hdiutil verify "$dmg"
+          unzip -tq "$zip"
+          mount_point="$(mktemp -d "$RUNNER_TEMP/hermes-light.XXXXXX")"
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_point"
+          trap 'hdiutil detach "$mount_point"' EXIT
+          app="$mount_point/Hermes Light.app"
+          resources="$app/Contents/Resources"
+          test "$(lipo -archs "$app/Contents/MacOS/Hermes Light")" = arm64
+          codesign --verify --deep --strict "$app"
+          test ! -e "$resources/agent-payload"
+          # 同时校验 ZIP 携带的构建标记，确保两个下载件都来自 Light 构建。
+          zip_stamp="$RUNNER_TEMP/hermes-light-zip-stamp.json"
+          unzip -p "$zip" 'Hermes Light.app/Contents/Resources/install-stamp.json' > "$zip_stamp"
+          cmp "$resources/install-stamp.json" "$zip_stamp"
+          python - "$zip_stamp" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              stamp = json.load(handle)
+          assert stamp['payload'] == 'light' and 'runtime' not in stamp, stamp
+          assert stamp['commit'] == os.environ['UPSTREAM_COMMIT'], stamp
+          assert stamp['tag'] == os.environ['UPSTREAM_TAG'], stamp
+          PY
+          # 对外发布时附上两个经过检查的下载件的校验值。
+          cd "$release"
+          shasum -a 256 "$stem.dmg" "$stem.zip" > SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hermes-light-macos-arm64
+          path: |
+            source/apps/desktop/release/HermesLight-*-mac-arm64.dmg
+            source/apps/desktop/release/HermesLight-*-mac-arm64.zip
+            source/apps/desktop/release/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
